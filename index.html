@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8" />
+  <title>Engineering Services Map Viewer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" onerror="window.__cdnFail && window.__cdnFail('Leaflet (leaflet.js from unpkg.com)')"></script>
+  <script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js" onerror="window.__cdnFail && window.__cdnFail('Esri Leaflet (esri-leaflet.js from unpkg.com)')"></script>
+  <script>
+    // Runs immediately, before the main script block, so it can catch
+    // CDN load failures and any uncaught error and show them on the
+    // page itself - a blank white screen otherwise gives no clue why.
+    window.__cdnFail = function(name) {
+      document.getElementById('fatalError').style.display = 'block';
+      document.getElementById('fatalErrorText').innerText =
+        name + ' failed to load from the CDN. This usually means your network ' +
+        '(or a firewall/proxy) is blocking unpkg.com. Try opening the deployment ' +
+        'URL on a different network, or ask IT to allow unpkg.com.';
+    };
+    window.addEventListener('error', function (e) {
+      const el = document.getElementById('fatalError');
+      const txt = document.getElementById('fatalErrorText');
+      if (el && txt && el.style.display !== 'block') {
+        el.style.display = 'block';
+        txt.innerText = 'Script error: ' + (e.message || 'unknown') +
+          (e.filename ? (' (' + e.filename.split('/').pop() + ':' + e.lineno + ')') : '');
+      }
+    });
+  </script>
+  <style>
+    html, body { height: 100%; margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    #map { position: absolute; top: 0; bottom: 0; left: 0; right: 0; }
+
+    #panel {
+      position: absolute; top: 12px; left: 12px; z-index: 1000;
+      background: #fff; border-radius: 6px; box-shadow: 0 1px 6px rgba(0,0,0,0.3);
+      width: 310px; max-height: 92vh; overflow-y: auto; font-size: 13px;
+    }
+    #panel h1 {
+      font-size: 14px; margin: 0; padding: 10px 12px; background: #1a3c5e; color: #fff;
+      border-radius: 6px 6px 0 0;
+    }
+    details.section { border-bottom: 1px solid #eee; }
+    details.section summary {
+      padding: 8px 12px; font-size: 12px; text-transform: uppercase; letter-spacing: .03em;
+      color: #333; cursor: pointer; background: #f4f6f8; font-weight: 600;
+    }
+    details.section .body { padding: 8px 12px; }
+
+    .layer-row { display: flex; align-items: center; margin-bottom: 4px; }
+    .layer-row input[type=checkbox] { margin-right: 6px; flex-shrink: 0; }
+    .swatch { width: 10px; height: 10px; display: inline-block; margin-right: 6px; border: 1px solid #999; flex-shrink: 0; }
+    .layer-row label { flex: 1; cursor: pointer; }
+    .del-btn {
+      border: none; background: transparent; color: #b33; font-size: 15px; line-height: 1;
+      cursor: pointer; padding: 0 4px; flex-shrink: 0;
+    }
+    .del-btn:hover { color: #e00; }
+    .zoom-note { color: #b5651d; font-size: 11px; margin: -2px 0 6px 16px; }
+
+    #addLayerForm input { width: 100%; box-sizing: border-box; margin-bottom: 5px; padding: 4px 6px; font-size: 12px; }
+    #addLayerForm button { width: 100%; padding: 5px; font-size: 12px; cursor: pointer; }
+    .helpLinks a { display: block; font-size: 11px; color: #1a5fb4; margin-bottom: 4px; }
+
+    #infoBar {
+      position: absolute; bottom: 8px; left: 12px; z-index: 1000;
+      background: rgba(255,255,255,0.9); padding: 4px 8px; border-radius: 4px;
+      font-size: 11px; color: #333; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    }
+    #messageLog {
+      position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+      display: flex; flex-direction: column; gap: 4px; max-width: 80%;
+    }
+    .msg {
+      display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 4px;
+      font-size: 12px; color: #fff; box-shadow: 0 1px 6px rgba(0,0,0,0.3);
+    }
+    .msg.error { background: #c0392b; }
+    .msg.info { background: #2c3e50; }
+    .msg button {
+      border: none; background: transparent; color: #fff; opacity: 0.8; cursor: pointer;
+      font-size: 13px; line-height: 1; flex-shrink: 0;
+    }
+    .msg button:hover { opacity: 1; }
+
+    #fatalError {
+      display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 3000;
+      background: #c0392b; color: #fff; padding: 12px 16px; font-size: 13px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+    #fatalError strong { display: block; margin-bottom: 4px; }
+    .disclaimer { font-size: 10.5px; color: #777; padding: 8px 12px; }
+    /* Leaflet's own controls (basemap switcher, zoom, scale) must always render
+       above our custom panel/overlays - without this they can end up hidden
+       behind #panel depending on window width. */
+    .leaflet-top, .leaflet-bottom { z-index: 2000 !important; }
+    #panel, #infoBar { z-index: 1000; }
+    #messageLog { z-index: 1500; }
+    .attr-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    .attr-table td { border-bottom: 1px solid #eee; padding: 2px 4px; vertical-align: top; }
+    .attr-table td:first-child { font-weight: 600; white-space: nowrap; padding-right: 8px; }
+  </style>
+</head>
+<body>
+
+  <div id="fatalError"><strong>Something failed to load</strong><span id="fatalErrorText"></span></div>
+
+  <div id="map"></div>
+
+  <div id="panel">
+    <h1>Engineering Services Viewer</h1>
+
+    <details class="section" open>
+      <summary>Cadastral</summary>
+      <div class="body" id="cadastralLayers"></div>
+    </details>
+
+    <details class="section" open>
+      <summary>Water</summary>
+      <div class="body" id="waterLayers"></div>
+    </details>
+
+    <details class="section" open>
+      <summary>Sewer</summary>
+      <div class="body" id="sewerLayers"></div>
+    </details>
+
+    <details class="section" open>
+      <summary>Stormwater</summary>
+      <div class="body" id="stormwaterLayers"></div>
+    </details>
+
+    <details class="section">
+      <summary>City of Cape Town Services</summary>
+      <div class="body" id="cctLayers"></div>
+    </details>
+
+    <details class="section" id="customSection">
+      <summary>Custom layers</summary>
+      <div class="body" id="customLayers"></div>
+    </details>
+
+    <details class="section" open>
+      <summary>Add a layer by URL</summary>
+      <div class="body">
+        <div id="addLayerForm">
+          <input id="newLayerName" type="text" placeholder="Display name, e.g. Sewer - Rodding Eye" />
+          <input id="newLayerUrl" type="text" placeholder="MapServer/FeatureServer layer URL, ends in /0, /1, ..." />
+          <input id="newLayerMinZoom" type="text" placeholder="Min zoom to load (optional, e.g. 16)" />
+          <button onclick="addCustomLayer()">Add layer</button>
+        </div>
+        <div class="helpLinks" style="margin-top:8px;">
+          <a href="https://citymaps.capetown.gov.za/agsext/rest/services/Theme_Based/Wayleave_Infrastructure/MapServer" target="_blank">Browse Wayleave Infrastructure layers</a>
+          <a href="https://citymaps.capetown.gov.za/agsext/rest/services/Theme_Based/Open_Data_Service/FeatureServer/layers" target="_blank">Browse City Open_Data_Service layers</a>
+          <a href="https://odp-cctegis.opendata.arcgis.com/search" target="_blank">Search City Open Data Portal</a>
+        </div>
+      </div>
+    </details>
+
+    <div class="disclaimer">
+      Cadastral: Chief Surveyor General national cadastral layer. Water/Sewer/Stormwater: City of
+      Cape Town Wayleave Infrastructure service &mdash; appears to sit outside the public Open Data
+      Portal; confirm access/reuse terms with the City's GIS department before relying on it beyond
+      personal reference. All layers: reference only, verify against surveyed records before use in
+      design or construction documentation.
+    </div>
+  </div>
+
+  <div id="infoBar">Zoom: <span id="zoomLevel"></span></div>
+  <div id="messageLog"></div>
+
+  <script>
+    if (typeof L === 'undefined') {
+      window.__cdnFail('Leaflet (loaded, but window.L is undefined - check console)');
+      throw new Error('Leaflet not available, aborting map init.');
+    }
+    // ---------------------------------------------------------------
+    // Base maps
+    // ---------------------------------------------------------------
+    const satellite = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { attribution: 'Esri World Imagery', maxZoom: 20 }
+    );
+    const streets = L.tileLayer(
+      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { attribution: '&copy; OpenStreetMap contributors', maxZoom: 19 }
+    );
+
+    const map = L.map('map', {
+      center: [-33.9249, 18.4241], // Cape Town CBD
+      zoom: 12,
+      layers: [streets]
+    });
+
+    L.control.layers({ 'Street map': streets, 'Satellite imagery': satellite }, {}, { position: 'topright' }).addTo(map);
+    L.control.scale({ metric: true, imperial: false }).addTo(map);
+
+    document.getElementById('zoomLevel').innerText = map.getZoom();
+
+    // ---------------------------------------------------------------
+    // Message log - persistent, stackable, dismissible. Errors do NOT
+    // auto-hide, so a real load/CORS/auth failure stays visible instead
+    // of flashing past unnoticed.
+    // ---------------------------------------------------------------
+    let msgCounter = 0;
+    function showStatus(msg, isError) {
+      const log = document.getElementById('messageLog');
+      const id = 'msg_' + (msgCounter++);
+      const el = document.createElement('div');
+      el.className = 'msg ' + (isError ? 'error' : 'info');
+      el.id = id;
+      el.innerHTML = `<span>${msg}</span><button title="Dismiss">&times;</button>`;
+      el.querySelector('button').addEventListener('click', () => el.remove());
+      log.appendChild(el);
+      if (!isError) {
+        setTimeout(() => { const e2 = document.getElementById(id); if (e2) e2.remove(); }, 5000);
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // Layer registry - single source of truth for every layer,
+    // built-in or custom. Handles add/remove, zoom-gating and
+    // deletion uniformly.
+    // ---------------------------------------------------------------
+    const layerRegistry = {}; // key -> { cfg, checked, mapLayer }
+    let autoKeyCounter = 0;
+
+    function makeAttrPopup(feature, layerName) {
+      const props = feature.properties || {};
+      let rows = Object.keys(props)
+        .filter(k => props[k] !== null && props[k] !== '')
+        .slice(0, 20)
+        .map(k => `<tr><td>${k}</td><td>${props[k]}</td></tr>`)
+        .join('');
+      return `<div><strong>${layerName}</strong></div><table class="attr-table">${rows}</table>`;
+    }
+
+    function buildFeatureLayer(cfg) {
+      const layer = L.esri.featureLayer({
+        url: cfg.url,
+        style: () => ({ color: cfg.color, ...cfg.style }),
+        pointToLayer: (geojson, latlng) =>
+          L.circleMarker(latlng, { radius: 5, color: cfg.color, weight: 1.5, fillOpacity: 0.85 })
+      });
+      layer.bindPopup(f => makeAttrPopup(f, cfg.name));
+      layer.on('requesterror', (e) => {
+        const code = (e && e.error && e.error.code) ? ` (HTTP ${e.error.code})` : '';
+        console.error('Layer load error:', cfg.name, cfg.url, e);
+        showStatus(`"${cfg.name}" failed to load${code}. Likely CORS or authentication on that service — see browser console for details.`, true);
+      });
+      let firstLoad = true;
+      layer.on('load', () => {
+        if (!firstLoad) return;
+        firstLoad = false;
+        const count = Object.keys(layer._layers || {}).length;
+        if (count === 0) {
+          showStatus(`"${cfg.name}" loaded successfully but returned 0 features in the current view — pan/zoom to an area where this asset exists.`, false);
+        }
+      });
+      return layer;
+    }
+
+    function updateLayerOnMap(key) {
+      const state = layerRegistry[key];
+      if (!state) return;
+      const zoomOk = !state.cfg.minZoom || map.getZoom() >= state.cfg.minZoom;
+      const shouldShow = state.checked && zoomOk;
+
+      if (shouldShow && !state.mapLayer) {
+        state.mapLayer = buildFeatureLayer(state.cfg);
+        state.mapLayer.addTo(map);
+      } else if (!shouldShow && state.mapLayer) {
+        map.removeLayer(state.mapLayer);
+        state.mapLayer = null;
+      }
+
+      const noteEl = document.getElementById('note_' + key);
+      if (noteEl) {
+        if (state.checked && !zoomOk) {
+          noteEl.style.display = 'block';
+          noteEl.innerText = `Zoom to ${state.cfg.minZoom}+ to load (currently ${map.getZoom()})`;
+        } else {
+          noteEl.style.display = 'none';
+        }
+      }
+    }
+
+    map.on('zoomend', () => {
+      document.getElementById('zoomLevel').innerText = map.getZoom();
+      Object.keys(layerRegistry).forEach(updateLayerOnMap);
+    });
+
+    function renderLayerRow(container, key, cfg) {
+      layerRegistry[key] = { cfg, checked: false, mapLayer: null };
+
+      const row = document.createElement('div');
+      row.className = 'layer-row';
+      row.id = 'row_' + key;
+      row.innerHTML = `
+        <input type="checkbox" id="chk_${key}">
+        <span class="swatch" style="background:${cfg.color}"></span>
+        <label for="chk_${key}">${cfg.name}</label>
+        <button class="del-btn" title="Remove layer">&times;</button>
+      `;
+      container.appendChild(row);
+
+      const note = document.createElement('div');
+      note.className = 'zoom-note';
+      note.id = 'note_' + key;
+      note.style.display = 'none';
+      container.appendChild(note);
+
+      row.querySelector('input[type=checkbox]').addEventListener('change', (e) => {
+        layerRegistry[key].checked = e.target.checked;
+        if (e.target.checked && cfg.minZoom && map.getZoom() < cfg.minZoom) {
+          showStatus(`"${cfg.name}" selected - zoom to level ${cfg.minZoom}+ for it to load (currently ${map.getZoom()}).`, false);
+        }
+        updateLayerOnMap(key);
+      });
+
+      row.querySelector('.del-btn').addEventListener('click', () => deleteLayer(key));
+
+      if (cfg.defaultOn) {
+        row.querySelector('input[type=checkbox]').checked = true;
+        layerRegistry[key].checked = true;
+        updateLayerOnMap(key);
+      }
+    }
+
+    function deleteLayer(key) {
+      const state = layerRegistry[key];
+      if (!state) return;
+      if (state.mapLayer) map.removeLayer(state.mapLayer);
+      delete layerRegistry[key];
+      const row = document.getElementById('row_' + key);
+      const note = document.getElementById('note_' + key);
+      if (row) row.remove();
+      if (note) note.remove();
+    }
+
+    // ---------------------------------------------------------------
+    // Layer definitions
+    // ---------------------------------------------------------------
+    const CADASTRAL_LAYERS = [
+      {
+        name: 'Erven (property boundaries)',
+        url: 'https://dffeportal.environment.gov.za/hosting/rest/services/CSG_Cadaster/CSG_Cadastral_Data/MapServer/2',
+        color: '#333333',
+        style: { weight: 1, fillOpacity: 0, dashArray: '3,3' },
+        minZoom: 15
+      }
+    ];
+
+    // City of Cape Town Wayleave Infrastructure service (Theme_Based/Wayleave_Infrastructure)
+    const WL = (id) => `https://citymaps.capetown.gov.za/agsext/rest/services/Theme_Based/Wayleave_Infrastructure/MapServer/${id}`;
+
+    const WATER_LAYERS = [
+      { name: 'Retic Water - Main', url: WL(66), color: '#1f6fb2', style: { weight: 2 }, minZoom: 14 },
+      { name: 'Retic Water - Main (Pumping)', url: WL(67), color: '#1a5490', style: { weight: 2, dashArray: '4,3' }, minZoom: 14 },
+      { name: 'Retic Water - Connection Line', url: WL(65), color: '#5aa1d8', style: { weight: 1.5 }, minZoom: 16 },
+      { name: 'Bulk Water - Main (Potable)', url: WL(68), color: '#0b3d91', style: { weight: 3 }, minZoom: 13 },
+      { name: 'Bulk Water - Main (Raw)', url: WL(69), color: '#4a7fc1', style: { weight: 3, dashArray: '6,3' }, minZoom: 13 },
+      { name: 'Bulk Water - Tunnel/Channel', url: WL(70), color: '#274e78', style: { weight: 3 }, minZoom: 13 }
+    ];
+
+    const SEWER_LAYERS = [
+      { name: 'Sewer - Gravity Main', url: WL(95), color: '#7a5230', style: { weight: 2 }, minZoom: 14 },
+      { name: 'Sewer - Pressurised Main', url: WL(93), color: '#9c6b3e', style: { weight: 2, dashArray: '4,3' }, minZoom: 14 },
+      { name: 'Sewer - Manhole', url: WL(84), color: '#5c3a1e', style: { weight: 1 }, minZoom: 16 },
+      { name: 'Sewer - Valve', url: WL(83), color: '#b5651d', style: { weight: 1 }, minZoom: 16 },
+      { name: 'Sewer - Pump Station', url: WL(82), color: '#8e44ad', style: { weight: 1 }, minZoom: 15 },
+      { name: 'Sewer - Pump Station (with generator)', url: WL(81), color: '#6c3483', style: { weight: 1 }, minZoom: 15 },
+      { name: 'Sewer - Treatment Plant', url: WL(80), color: '#c0392b', style: { weight: 1.5, fillOpacity: 0.15 }, minZoom: 12 },
+      { name: 'Sewer - Connection Point', url: WL(91), color: '#a35b2a', style: { weight: 1 }, minZoom: 17 },
+      { name: 'Sewer - Final Effluent Outfall', url: WL(96), color: '#34495e', style: { weight: 1.5 }, minZoom: 14 }
+    ];
+
+    const STORMWATER_LAYERS = [
+      { name: 'Stormwater - Conduit', url: WL(20), color: '#16a085', style: { weight: 2 }, minZoom: 14 },
+      { name: 'Stormwater - Junction', url: WL(14), color: '#0e6655', style: { weight: 1 }, minZoom: 16 },
+      { name: 'Stormwater - Inlet / Outlet', url: WL(16), color: '#1abc9c', style: { weight: 1 }, minZoom: 16 },
+      { name: 'Stormwater - Ancillary Structure', url: WL(17), color: '#48c9b0', style: { weight: 1 }, minZoom: 16 },
+      { name: 'Stormwater - Storage Facility', url: WL(18), color: '#117864', style: { weight: 1.5, fillOpacity: 0.15 }, minZoom: 12 },
+      { name: 'Stormwater - Pump Facility', url: WL(19), color: '#0b5345', style: { weight: 1 }, minZoom: 15 }
+    ];
+
+    const CCT_LAYERS = [
+      {
+        name: 'Electricity generation & distribution districts',
+        url: 'https://citymaps.capetown.gov.za/agsext/rest/services/Theme_Based/Open_Data_Service/FeatureServer/2',
+        color: '#e6a817', style: { weight: 1.5, fillOpacity: 0.08 }
+      },
+      {
+        name: 'Biodiversity network',
+        url: 'https://citymaps.capetown.gov.za/agsext/rest/services/Theme_Based/Open_Data_Service/FeatureServer/133',
+        color: '#27ae60', style: { weight: 1, fillOpacity: 0.12 }
+      },
+      {
+        name: 'Heritage inventory',
+        url: 'https://citymaps.capetown.gov.za/agsext/rest/services/Theme_Based/Open_Data_Service/FeatureServer/49',
+        color: '#8e44ad', style: { weight: 1, fillOpacity: 0.12 }, minZoom: 13
+      },
+      {
+        name: 'Formal heritage protections (HPOZ / MPBL)',
+        url: 'https://citymaps.capetown.gov.za/agsext/rest/services/Theme_Based/Open_Data_Service/FeatureServer/186',
+        color: '#c0392b', style: { weight: 1, fillOpacity: 0.08 }, minZoom: 13
+      }
+    ];
+
+    // ---------------------------------------------------------------
+    // Render all built-in sections
+    // ---------------------------------------------------------------
+    function renderGroup(containerId, layers, keyPrefix) {
+      const container = document.getElementById(containerId);
+      layers.forEach((cfg, i) => renderLayerRow(container, keyPrefix + i, cfg));
+    }
+
+    renderGroup('cadastralLayers', CADASTRAL_LAYERS, 'cad_');
+    renderGroup('waterLayers', WATER_LAYERS, 'water_');
+    renderGroup('sewerLayers', SEWER_LAYERS, 'sewer_');
+    renderGroup('stormwaterLayers', STORMWATER_LAYERS, 'storm_');
+    renderGroup('cctLayers', CCT_LAYERS, 'cct_');
+
+    // ---------------------------------------------------------------
+    // Add a layer by URL at runtime
+    // ---------------------------------------------------------------
+    const customColors = ['#2980b9', '#d35400', '#16a085', '#8e44ad', '#c0392b', '#2c3e50'];
+
+    function addCustomLayer() {
+      const name = document.getElementById('newLayerName').value.trim();
+      const url = document.getElementById('newLayerUrl').value.trim();
+      const minZoomRaw = document.getElementById('newLayerMinZoom').value.trim();
+      if (!url) { showStatus('Paste a FeatureServer / MapServer layer URL first.', true); return; }
+
+      const cfg = {
+        name: name || url,
+        url: url,
+        color: customColors[autoKeyCounter % customColors.length],
+        style: { weight: 1.5, fillOpacity: 0.1 },
+        minZoom: minZoomRaw ? parseInt(minZoomRaw, 10) : 0,
+        defaultOn: true
+      };
+      const key = 'custom_' + (autoKeyCounter++);
+      renderLayerRow(document.getElementById('customLayers'), key, cfg);
+      document.getElementById('customSection').open = true;
+
+      document.getElementById('newLayerName').value = '';
+      document.getElementById('newLayerUrl').value = '';
+      document.getElementById('newLayerMinZoom').value = '';
+    }
+  </script>
+</body>
+</html>
